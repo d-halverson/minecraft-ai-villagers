@@ -1,6 +1,7 @@
 package com.drew.aivillagers.command;
 
 import com.drew.aivillagers.AiVillagers;
+import com.drew.aivillagers.chat.ReplyFormatter;
 import com.drew.aivillagers.config.AiConfig;
 import com.drew.aivillagers.ollama.OllamaClient;
 import com.mojang.brigadier.CommandDispatcher;
@@ -31,6 +32,9 @@ public final class AiVillagersCommand {
 					source.sendSuccess(() -> Component.literal("§7- Ollama URL: §f" + cfg.ollama.url), false);
 					source.sendSuccess(() -> Component.literal("§7- Chat radius: §f" + cfg.chat.radius + " blocks"), false);
 					source.sendSuccess(() -> Component.literal("§7- Cooldown: §f" + cfg.chat.cooldown_seconds + "s"), false);
+					source.sendSuccess(() -> Component.literal("§7- Max reply: §f" + cfg.chat.max_reply_chars + " chars / " + cfg.ollama.num_predict + " tokens"), false);
+					source.sendSuccess(() -> Component.literal("§7- Stand still near players: §f" + (cfg.chat.freeze_near_players ? "on (" + cfg.chat.freeze_radius + " blocks)" : "off")), false);
+					source.sendSuccess(() -> Component.literal("§7- AI villagers: §f" + (cfg.chat.require_persona ? String.join(", ", cfg.personas.keySet()) : "every named villager")), false);
 
 					OllamaClient client = mod.getOllamaClient();
 					client.ping(cfg.ollama).whenComplete((ok, err) -> {
@@ -47,7 +51,7 @@ public final class AiVillagersCommand {
 				}))
 			.then(Commands.literal("persona")
 				.requires(Commands.hasPermission(Commands.LEVEL_ALL))
-				.then(Commands.argument("name", StringArgumentType.word())
+				.then(Commands.argument("name", StringArgumentType.string())
 					.executes(ctx -> {
 						CommandSourceStack source = ctx.getSource();
 						String name = StringArgumentType.getString(ctx, "name");
@@ -74,7 +78,7 @@ public final class AiVillagersCommand {
 								net.minecraft.world.phys.AABB box = sp.getBoundingBox().inflate(16.0);
 								java.util.List<net.minecraft.world.entity.npc.villager.AbstractVillager> villagers = sp.level().getEntitiesOfClass(
 									net.minecraft.world.entity.npc.villager.AbstractVillager.class, box,
-									v -> v.isAlive() && v.hasCustomName() && name.equalsIgnoreCase(v.getCustomName().getString().trim()));
+									v -> v.isAlive() && v.hasCustomName() && AiConfig.normalizeName(name).equals(AiConfig.normalizeName(v.getCustomName().getString())));
 								for (net.minecraft.world.entity.npc.villager.AbstractVillager v : villagers) {
 									v.getLookControl().setLookAt(sp, 30.0f, 30.0f);
 									mod.getBubbleManager().show(v, "*Nods* Understood.", 4);
@@ -84,7 +88,7 @@ public final class AiVillagersCommand {
 						}))))
 			.then(Commands.literal("resetpersona")
 				.requires(Commands.hasPermission(Commands.LEVEL_ALL))
-				.then(Commands.argument("name", StringArgumentType.word())
+				.then(Commands.argument("name", StringArgumentType.string())
 					.executes(ctx -> {
 						CommandSourceStack source = ctx.getSource();
 						String name = StringArgumentType.getString(ctx, "name");
@@ -98,23 +102,25 @@ public final class AiVillagersCommand {
 					})))
 			.then(Commands.literal("test")
 				.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
-				.then(Commands.argument("name", StringArgumentType.word())
+				.then(Commands.argument("name", StringArgumentType.string())
 					.then(Commands.argument("message", StringArgumentType.greedyString())
 						.executes(ctx -> {
 							CommandSourceStack source = ctx.getSource();
 							String name = StringArgumentType.getString(ctx, "name");
 							String msg = StringArgumentType.getString(ctx, "message");
 							AiConfig cfg = mod.getConfig();
-							String persona = cfg.getPersona(name);
+							String prompt = cfg.getSystemPrompt(name);
+							String speaker = source.getEntity() != null ? source.getEntity().getName().getString() : "Server";
 
 							source.sendSuccess(() -> Component.literal("§7[AI Villagers] Testing dialogue for §f" + name + "§7: §o\"" + msg + "\"§r"), false);
 
-							mod.getOllamaClient().chat(persona, msg, cfg.ollama).whenComplete((reply, err) -> {
+							mod.getOllamaClient().chat(prompt, cfg.getUserPrompt(name, speaker, msg), cfg.ollama).whenComplete((reply, err) -> {
+								String text = err == null && reply != null ? ReplyFormatter.fit(reply.text(), cfg.chat.max_reply_chars, reply.cutOff(), name) : "";
 								source.getServer().execute(() -> {
-									if (err != null || reply == null || reply.isBlank()) {
-										source.sendFailure(Component.literal("[AI Villagers] Error querying model: " + (err != null ? err.getMessage() : "empty reply")));
+									if (text.isBlank()) {
+										source.sendFailure(Component.literal("[AI Villagers] Error querying model: " + (err != null ? err.getMessage() : "no reply (is Ollama running?)")));
 									} else {
-										source.sendSuccess(() -> Component.literal("§e" + name + "§7: §f" + reply), false);
+										source.sendSuccess(() -> Component.literal("§e" + name + "§7: §f" + text), false);
 									}
 								});
 							});

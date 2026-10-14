@@ -2,6 +2,7 @@ package com.drew.aivillagers;
 
 import com.drew.aivillagers.bubble.BubbleManager;
 import com.drew.aivillagers.chat.ChatListener;
+import com.drew.aivillagers.chat.VillagerFreezer;
 import com.drew.aivillagers.command.AiVillagersCommand;
 import com.drew.aivillagers.config.AiConfig;
 import com.drew.aivillagers.ollama.OllamaClient;
@@ -12,8 +13,8 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.world.entity.Display;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,6 +31,7 @@ public final class AiVillagers implements ModInitializer {
 	private OllamaClient ollamaClient;
 	private BubbleManager bubbleManager;
 	private ChatListener chatListener;
+	private VillagerFreezer freezer;
 
 	@Override
 	public void onInitialize() {
@@ -38,22 +40,27 @@ public final class AiVillagers implements ModInitializer {
 		config = AiConfig.load(configDir);
 		ollamaClient = new OllamaClient();
 		bubbleManager = new BubbleManager();
-		chatListener = new ChatListener(config, ollamaClient, bubbleManager);
+		chatListener = new ChatListener(this::getConfig, ollamaClient, bubbleManager);
+		freezer = new VillagerFreezer(this::getConfig);
 
-		// Register chat listener
-		ServerMessageEvents.CHAT_MESSAGE.register((message, player, bound) -> {
-			chatListener.onChatMessage(message, player, bound);
+		// Any chat message: nearby AI villagers answer
+		ServerMessageEvents.CHAT_MESSAGE.register((message, player, bound) -> chatListener.onChatMessage(message, player));
+		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> chatListener.forget(handler.getPlayer().getUUID()));
+
+		// Tick bubble timers and hold AI villagers still near players
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			bubbleManager.tick();
+			freezer.tick(server);
 		});
 
-		// Tick bubble timers
-		ServerTickEvents.END_SERVER_TICK.register(server -> bubbleManager.tick());
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			bubbleManager.clearAll();
+			freezer.releaseAll();
+		});
 
-		// Clean up bubbles on server stopping
-		ServerLifecycleEvents.SERVER_STOPPING.register(server -> bubbleManager.clearAll());
-
-		// Prevent orphaned text displays from old sessions
+		// Remove speech bubbles left over from an earlier session (crash, or a chunk saved mid-reply)
 		ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
-			if (entity instanceof Display.TextDisplay && entity.entityTags().contains(BubbleManager.TAG_BUBBLE)) {
+			if (bubbleManager.isOrphan(entity)) {
 				entity.discard();
 			}
 		});
@@ -87,6 +94,7 @@ public final class AiVillagers implements ModInitializer {
 				return net.minecraft.world.InteractionResult.SUCCESS;
 			}
 
+			if (text.length() > 2000) text = text.substring(0, 2000);
 			setVillagerPersona(name, text);
 			villager.getLookControl().setLookAt(sp, 30.0f, 30.0f);
 			bubbleManager.show(villager, "*Reads book* Understood. I know who I am now.", 5);
@@ -152,7 +160,7 @@ public final class AiVillagers implements ModInitializer {
 
 	public void reloadConfig() {
 		config = AiConfig.load(configDir);
-		chatListener = new ChatListener(config, ollamaClient, bubbleManager);
+		freezer.releaseAll(); // re-applied on the next scan if still wanted
 		LOG.info("AI Villagers configuration reloaded.");
 	}
 
@@ -174,5 +182,9 @@ public final class AiVillagers implements ModInitializer {
 
 	public ChatListener getChatListener() {
 		return chatListener;
+	}
+
+	public VillagerFreezer getFreezer() {
+		return freezer;
 	}
 }

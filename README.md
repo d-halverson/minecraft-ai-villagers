@@ -7,7 +7,8 @@ Vanilla clients can connect and see the floating dialogue bubbles with **zero cl
 
 ## What it is
 
-* **Floating speech bubbles.** Name a villager with a name tag, mention its name in chat within range (default 8 blocks), and the villager turns to look at you and speaks with a floating text box above its head.
+* **Floating speech bubbles.** Name a villager with a name tag and give it a persona. Say anything in chat within 16 blocks and it turns to look at you and answers in a floating text box above its head.
+* **Stands still to talk.** AI villagers stop walking while a player is within 16 blocks, so you don't have to chase them while you type.
 * **100% vanilla client compatible.** The speech bubble is rendered using Minecraft's built-in `TextDisplay` entities riding the villager. Unmodded vanilla players on your server can see and read the dialogue without installing any mod or pack.
 * **Fast and 100% local (CPU inference).** Powered by [Ollama](https://ollama.com/). Runs on your server's CPU with negligible resource usage (~400 MB RAM for `qwen2.5:0.5b`). Replies take ~1–2 seconds.
 * **Custom personas.** Every villager can have its own personality (e.g. Gareth the grumpy blacksmith, a superstitious cleric, or an excited fisherman).
@@ -76,9 +77,10 @@ If you play in singleplayer:
 ## How to talk to villagers
 
 1. **Name a villager:** Rename a name tag in an anvil (for example, `Gareth`) and apply it to a villager.
-2. **Talk to it:** Stand within 8 blocks of the villager and type a message containing its name in regular chat:
-   > *Hey Gareth, how is the harvest today?*
-3. The villager turns towards you, displays `...` while thinking, and pops up its reply in a speech bubble.
+2. **Give it a persona:** write a personality in a Book & Quill and sneak-right-click the villager with it, or run `/aivillagers persona Gareth You are Gareth, a grumpy blacksmith.` (quote names with spaces: `/aivillagers persona "Chris Hansen" ...`). Only villagers with a persona talk, unless `chat.require_persona` is `false`.
+3. **Talk to it:** Stand within 16 blocks and type anything in regular chat. You don't need to say its name:
+   > *How is the harvest today?*
+4. The villager stops walking while you're near, turns towards you, displays `...` while thinking, and pops up its reply in a speech bubble. If several AI villagers are near, the ones you name answer; otherwise the nearest one or two do.
 
 ## Giving villagers a persona in-game
 
@@ -106,33 +108,36 @@ You can also assign or inspect personas via command without touching any files:
 
 ## Configuration
 
-Settings are stored in `config/aivillagers.json`:
+Settings are stored in `config/aivillagers.json` (configs from 0.1.0 are upgraded automatically):
 
 ```json
 {
+  "config_version": 2,
   "ollama": {
     "url": "http://localhost:11434/api/chat",
     "model": "qwen2.5:0.5b",
-    "num_predict": 20,
+    "num_predict": 64,
     "num_thread": 3,
     "temperature": 0.8,
-    "timeout_seconds": 8
+    "timeout_seconds": 20
   },
   "chat": {
-    "radius": 8.0,
-    "cooldown_seconds": 10,
-    "max_reply_chars": 60,
-    "display_seconds": 5,
-    "max_queue": 3
+    "radius": 16.0,
+    "require_persona": true,
+    "max_responders": 2,
+    "cooldown_seconds": 2,
+    "max_reply_chars": 150,
+    "display_seconds": 6,
+    "max_queue": 4,
+    "freeze_near_players": true,
+    "freeze_radius": 16.0
   },
-  "fallback_lines": [
-    "Hmm... give me a moment.",
-    "Eh? Say that again.",
-    "I'm busy right now."
-  ],
-  "default_persona": "You are a villager named {name}. You live in a Minecraft village. Reply in under 12 words. Stay in character. Never mention being an AI.",
+  "fallback_lines": ["Hmm... give me a moment.", "Eh? Say that again.", "I'm busy right now."],
+  "default_persona": "You are a villager named {name}. You live in a Minecraft village.",
+  "style_rules": "Stay in character as {name}. Never mention being an AI.",
+  "reply_hint": "(Reply as {name} in one or two short sentences, under {words} words.)",
   "personas": {
-    "gareth": "You are Gareth, a grumpy blacksmith villager. Reply in under 12 words."
+    "gareth": "You are Gareth, a grumpy blacksmith villager."
   }
 }
 ```
@@ -141,16 +146,23 @@ Settings are stored in `config/aivillagers.json`:
 | --- | --- | --- |
 | `ollama.url` | `"http://localhost:11434/api/chat"` | URL to Ollama chat endpoint (can be a remote server) |
 | `ollama.model` | `"qwen2.5:0.5b"` | Model tag in Ollama |
-| `ollama.num_predict` | `20` | Max tokens generated (~12-15 words) |
+| `ollama.num_predict` | `64` | Max tokens generated. Leave headroom above `max_reply_chars` / 4 so replies can finish their sentence |
 | `ollama.num_thread` | `3` | CPU threads allocated to model inference |
 | `ollama.temperature` | `0.8` | Creativity / variability of responses |
-| `chat.radius` | `8.0` | Maximum distance (in blocks) to talk to a villager |
-| `chat.cooldown_seconds` | `10` | Per-player cooldown between dialogues |
-| `chat.max_reply_chars` | `60` | Maximum character length of the speech bubble |
-| `chat.display_seconds` | `5` | How long the speech bubble stays visible |
-| `chat.max_queue` | `3` | Maximum concurrent queries before showing a fallback line |
-| `default_persona` | *see above* | Default prompt applied to named villagers (`{name}` is replaced) |
-| `personas` | *map* | Per-villager custom personas (keyed by lowercase name) |
+| `ollama.timeout_seconds` | `20` | Give up and show a fallback line after this long |
+| `chat.radius` | `16.0` | AI villagers within this many blocks answer chat |
+| `chat.require_persona` | `true` | Only villagers with a custom persona talk. `false` makes every named villager talk (using `default_persona`) |
+| `chat.max_responders` | `2` | Most villagers that answer one message. Named villagers first, then nearest |
+| `chat.cooldown_seconds` | `2` | Per-player cooldown between messages villagers react to |
+| `chat.max_reply_chars` | `150` | Longest bubble text. The model is asked for about `max_reply_chars / 6` words, and longer replies are trimmed to whole sentences |
+| `chat.display_seconds` | `6` | Minimum time a bubble stays up; long replies stay longer |
+| `chat.max_queue` | `4` | Maximum concurrent queries before showing a fallback line |
+| `chat.freeze_near_players` | `true` | AI villagers stand still while a player is near (they still flee danger) |
+| `chat.freeze_radius` | `16.0` | Distance for `freeze_near_players` |
+| `default_persona` | *see above* | Persona for named villagers without one (`{name}` is replaced); only used when `require_persona` is `false` |
+| `style_rules` | *see above* | Added to every persona's system prompt |
+| `reply_hint` | *see above* | Added after the player's message; `{words}` is the word limit |
+| `personas` | *map* | Per-villager personas, keyed by name in lowercase with spaces as `_` (`"Chris Hansen"` → `chris_hansen`) |
 
 ## Commands
 
@@ -159,7 +171,9 @@ Settings are stored in `config/aivillagers.json`:
 | `/aivillagers persona <name> <text>` | Everyone | Sets a custom persona for `<name>` and saves to config |
 | `/aivillagers persona <name>` | Everyone | Views the current persona for `<name>` |
 | `/aivillagers resetpersona <name>` | Everyone | Resets `<name>` to the default persona |
-| `/aivillagers status` | Everyone | Shows Ollama connection status, model, and active settings |
+| `/aivillagers status` | Everyone | Shows Ollama connection status, model, active settings and which villagers have personas |
+| `/aivillagers persona <name> [text]` | Everyone | Shows or sets a villager's persona. Quote names with spaces |
+| `/aivillagers resetpersona <name>` | Everyone | Removes a villager's persona |
 | `/aivillagers reload` | Gamemasters / Ops | Reloads `config/aivillagers.json` without restarting the server |
 | `/aivillagers test <name> <message>` | Gamemasters / Ops | Tests a dialogue query against Ollama directly in chat |
 | `/llmv <...>` | Same | Shorthand alias for `/aivillagers` |
@@ -188,11 +202,11 @@ The compiled mod jar will be in `build/libs/aivillagers-<version>.jar`.
 
 * **The villager doesn't reply:**
   * Check that Ollama is running (`curl http://localhost:11434/api/tags` or `/aivillagers status`).
-  * Make sure you are within 8 blocks and typed the villager's exact name in chat.
+  * Make sure the villager has a persona (`/aivillagers status` lists them) and you are within 16 blocks.
+  * Each player's messages are ignored for 2 seconds after one gets an answer (`cooldown_seconds`).
   * Check server logs for any connection timeout warnings.
-* **The replies are too long:**
-  * Ensure `num_predict` is set to `20` in `config/aivillagers.json`.
-  * Specify "Reply in under 10 words" in the persona.
+* **The replies are too long or too short:**
+  * Change `chat.max_reply_chars`; the word limit sent to the model follows it. Keep `ollama.num_predict` at about half of `max_reply_chars` or more so replies can finish.
 * **Server TPS drops during generation:**
   * Decrease `ollama.num_thread` from `3` to `2` so Ollama leaves enough CPU cores for Minecraft.
   * Set `OLLAMA_NUM_PARALLEL=1` in your environment.

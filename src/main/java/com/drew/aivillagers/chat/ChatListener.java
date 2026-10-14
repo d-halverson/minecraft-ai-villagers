@@ -3,134 +3,138 @@ package com.drew.aivillagers.chat;
 import com.drew.aivillagers.bubble.BubbleManager;
 import com.drew.aivillagers.config.AiConfig;
 import com.drew.aivillagers.ollama.OllamaClient;
-import net.minecraft.network.chat.ChatType;
-import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.PlayerChatMessage;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.npc.villager.AbstractVillager;
-import net.minecraft.world.phys.AABB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
+/**
+ * Any chat message makes the nearby AI villagers (named villagers with a persona) answer in a speech bubble.
+ * The message does not have to contain a villager's name; naming one only picks who answers.
+ */
 public final class ChatListener {
 	private static final Logger LOG = LoggerFactory.getLogger("aivillagers-chat");
 
-	private final AiConfig config;
+	private final Supplier<AiConfig> config;
 	private final OllamaClient ollama;
 	private final BubbleManager bubbles;
 	private final Map<UUID, Long> cooldowns = new ConcurrentHashMap<>();
+	/** Villagers waiting for a reply; they ignore further chat until it arrives. */
+	private final Set<UUID> busy = ConcurrentHashMap.newKeySet();
 	private final AtomicInteger pendingCount = new AtomicInteger(0);
 	private final Random random = new Random();
 
-	public ChatListener(AiConfig config, OllamaClient ollama, BubbleManager bubbles) {
+	public ChatListener(Supplier<AiConfig> config, OllamaClient ollama, BubbleManager bubbles) {
 		this.config = config;
 		this.ollama = ollama;
 		this.bubbles = bubbles;
 	}
 
-	public void onChatMessage(PlayerChatMessage message, ServerPlayer player, ChatType.Bound boundChatType) {
-		if (player == null || message == null || player.level().isClientSide()) {
-			return;
-		}
-
-		String chatText = message.decoratedContent() != null ? message.decoratedContent().getString() : message.signedContent();
-		if (chatText == null || chatText.isBlank()) {
-			return;
-		}
-
-		String lower = chatText.toLowerCase(Locale.ROOT);
-
-		// Check player cooldown
-		long now = System.currentTimeMillis();
-		long cooldownMs = config.chat.cooldown_seconds * 1000L;
-		Long lastTime = cooldowns.get(player.getUUID());
-		if (lastTime != null && (now - lastTime) < cooldownMs) {
-			return;
-		}
-
-		// Find nearby named villagers
-		double r = config.chat.radius;
-		AABB box = player.getBoundingBox().inflate(r);
-		List<AbstractVillager> nearby = player.level().getEntitiesOfClass(AbstractVillager.class, box, v -> v.isAlive() && v.hasCustomName());
-
-		AbstractVillager target = null;
-		String villagerName = null;
-
-		for (AbstractVillager v : nearby) {
-			Component comp = v.getCustomName();
-			if (comp == null) continue;
-			String name = comp.getString().trim();
-			if (!name.isEmpty() && lower.contains(name.toLowerCase(Locale.ROOT))) {
-				target = v;
-				villagerName = name;
-				break;
-			}
-		}
-
-		if (target == null) {
-			return;
-		}
-
-		// Turn villager towards the player
-		target.getLookControl().setLookAt(player, 30.0f, 30.0f);
-
-		// Queue limit check
-		if (pendingCount.get() >= config.chat.max_queue) {
-			bubbles.show(target, randomFallback(), config.chat.display_seconds);
-			return;
-		}
-
-		cooldowns.put(player.getUUID(), now);
-
-		// Show thinking indicator
-		final AbstractVillager villager = target;
-		bubbles.show(villager, "...", 30);
-		pendingCount.incrementAndGet();
-
-		String persona = config.getPersona(villagerName);
-		String userPrompt = player.getName().getString() + ": " + chatText.trim();
-
-		ollama.chat(persona, userPrompt, config.ollama).whenComplete((reply, err) -> {
-			pendingCount.decrementAndGet();
-			String text;
-			if (err != null || reply == null || reply.isBlank()) {
-				text = randomFallback();
-			} else {
-				text = cleanAndTruncate(reply, config.chat.max_reply_chars);
-			}
-
-			player.level().getServer().execute(() -> {
-				if (villager.isAlive() && !villager.isRemoved()) {
-					bubbles.show(villager, text, config.chat.display_seconds);
-				}
-			});
-		});
+	public void onChatMessage(PlayerChatMessage message, ServerPlayer player) {
+		if (message == null) return;
+		handle(player, message.signedContent());
 	}
 
-	public String randomFallback() {
-		List<String> lines = config.fallback_lines;
+	/** Runs on the server thread. Returns the villagers that will answer (empty if none are in range). */
+	public List<AbstractVillager> handle(ServerPlayer player, String chatText) {
+		if (player == null || player.isSpectator() || chatText == null || chatText.isBlank()) {
+			return List.of();
+		}
+		AiConfig cfg = config.get();
+
+		long now = System.currentTimeMillis();
+		Long lastTime = cooldowns.get(player.getUUID());
+		if (lastTime != null && (now - lastTime) < cfg.chat.cooldown_seconds * 1000L) {
+			return List.of();
+		}
+
+		List<AbstractVillager> responders = pickResponders(player, chatText, cfg);
+		if (responders.isEmpty()) {
+			return List.of();
+		}
+		cooldowns.put(player.getUUID(), now);
+
+		for (AbstractVillager villager : responders) {
+			villager.getLookControl().setLookAt(player, 30.0f, 30.0f);
+
+			if (pendingCount.get() >= cfg.chat.max_queue) {
+				bubbles.show(villager, randomFallback(cfg), cfg.chat.display_seconds);
+				continue;
+			}
+
+			String name = villager.getCustomName().getString().trim();
+			busy.add(villager.getUUID());
+			pendingCount.incrementAndGet();
+			bubbles.show(villager, "...", cfg.ollama.timeout_seconds + 5);
+
+			String userPrompt = cfg.getUserPrompt(name, player.getName().getString(), chatText);
+			ollama.chat(cfg.getSystemPrompt(name), userPrompt, cfg.ollama).whenComplete((reply, err) -> {
+				String text = null;
+				if (err == null && reply != null) {
+					text = ReplyFormatter.fit(reply.text(), cfg.chat.max_reply_chars, reply.cutOff(), name);
+				}
+				if (text == null || text.isBlank()) {
+					text = randomFallback(cfg);
+				}
+				final String bubbleText = text;
+				player.level().getServer().execute(() -> {
+					pendingCount.decrementAndGet();
+					busy.remove(villager.getUUID());
+					if (villager.isAlive() && !villager.isRemoved()) {
+						bubbles.show(villager, bubbleText, displaySeconds(bubbleText, cfg));
+					}
+				});
+			});
+		}
+		return responders;
+	}
+
+	/** AI villagers in range that are not already thinking; named ones first, otherwise the nearest. */
+	private List<AbstractVillager> pickResponders(ServerPlayer player, String chatText, AiConfig cfg) {
+		double r = cfg.chat.radius;
+		double r2 = r * r;
+		List<AbstractVillager> nearby = new ArrayList<>(player.level().getEntitiesOfClass(AbstractVillager.class,
+			player.getBoundingBox().inflate(r),
+			v -> v.isAlive() && v.hasCustomName() && v.distanceToSqr(player) <= r2
+				&& !busy.contains(v.getUUID()) && cfg.isAiVillagerName(v.getCustomName().getString())));
+		if (nearby.isEmpty()) return List.of();
+
+		nearby.sort(Comparator.comparingDouble(v -> v.distanceToSqr(player)));
+		List<AbstractVillager> named = nearby.stream()
+			.filter(v -> mentions(chatText, v.getCustomName().getString()))
+			.toList();
+		List<AbstractVillager> pool = named.isEmpty() ? nearby : named;
+		return pool.subList(0, Math.min(pool.size(), Math.max(1, cfg.chat.max_responders)));
+	}
+
+	/** True if the message contains the villager's name, ignoring case and treating spaces/underscores alike. */
+	public static boolean mentions(String message, String villagerName) {
+		String name = AiConfig.normalizeName(villagerName);
+		if (name.isEmpty() || message == null) return false;
+		String msg = "_" + AiConfig.normalizeName(message.replaceAll("[^\\p{L}\\p{N}_\\s-]", " ")) + "_";
+		return msg.contains("_" + name + "_");
+	}
+
+	/** Long replies stay up long enough to read: the configured minimum, or 2 s plus one second per 15 characters. */
+	public static int displaySeconds(String text, AiConfig cfg) {
+		return Math.max(cfg.chat.display_seconds, 2 + text.length() / 15);
+	}
+
+	public String randomFallback(AiConfig cfg) {
+		List<String> lines = cfg.fallback_lines;
 		if (lines == null || lines.isEmpty()) {
 			return "Hmm... give me a moment.";
 		}
 		return lines.get(random.nextInt(lines.size()));
 	}
 
-	public static String cleanAndTruncate(String input, int maxChars) {
-		if (input == null) return "";
-		String cleaned = input.replace('\r', ' ').replace('\n', ' ').trim();
-
-		// Remove leading/trailing quotes if the model wrapped the speech in quotes
-		if (cleaned.length() >= 2 && cleaned.startsWith("\"") && cleaned.endsWith("\"")) {
-			cleaned = cleaned.substring(1, cleaned.length() - 1).trim();
-		}
-
-		if (cleaned.length() <= maxChars) {
-			return cleaned;
-		}
-		return cleaned.substring(0, Math.max(1, maxChars - 1)).trim() + "…";
+	public void forget(UUID playerId) {
+		cooldowns.remove(playerId);
 	}
 }
