@@ -1,0 +1,9 @@
+accessWidener v2 official
+
+# Text display properties are only settable through NBT in vanilla; the mod sets them directly.
+accessible method net/minecraft/world/entity/Display$TextDisplay setText (Lnet/minecraft/network/chat/Component;)V
+accessible method net/minecraft/world/entity/Display$TextDisplay getText ()Lnet/minecraft/network/chat/Component;
+accessible method net/minecraft/world/entity/Display$TextDisplay setLineWidth (I)V
+accessible method net/minecraft/world/entity/Display$TextDisplay setBackgroundColor (I)V
+accessible method net/minecraft/world/entity/Display setTransformation (Lcom/mojang/math/Transformation;)V
+accessible method net/minecraft/world/entity/Display setBillboardConstraints (Lnet/minecraft/world/entity/Display$BillboardConstraints;)V
