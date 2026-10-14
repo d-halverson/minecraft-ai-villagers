@@ -99,4 +99,29 @@ public final class AiConfig {
 		}
 		return default_persona.replace("{name}", villagerName.trim());
 	}
+
+	public boolean hasCustomPersona(String villagerName) {
+		if (villagerName == null) return false;
+		String lower = villagerName.trim().toLowerCase(Locale.ROOT);
+		return personas.containsKey(lower);
+	}
+
+	public synchronized void setPersona(String villagerName, String personaText, Path configDir) {
+		if (villagerName == null || villagerName.isBlank() || personaText == null || personaText.isBlank()) {
+			return;
+		}
+		String lower = villagerName.trim().toLowerCase(Locale.ROOT);
+		personas.put(lower, personaText.trim());
+		save(configDir);
+	}
+
+	public synchronized boolean removePersona(String villagerName, Path configDir) {
+		if (villagerName == null || villagerName.isBlank()) return false;
+		String lower = villagerName.trim().toLowerCase(Locale.ROOT);
+		boolean removed = personas.remove(lower) != null;
+		if (removed) {
+			save(configDir);
+		}
+		return removed;
+	}
 }

@@ -80,6 +80,30 @@ If you play in singleplayer:
    > *Hey Gareth, how is the harvest today?*
 3. The villager turns towards you, displays `...` while thinking, and pops up its reply in a speech bubble.
 
+## Giving villagers a persona in-game
+
+Players can easily give any villager a custom personality right inside the game using either of two methods:
+
+### Method A: Book & Quill (Survival & Immersive)
+
+1. Write any backstory or personality traits into a **Book and Quill** (or Signed Book). For example:
+   > *You are Barnaby, an anxious librarian who hoards enchanted books and is terrified of spiders. Reply in under 12 words.*
+2. Hold the book in your main hand and **sneak + right-click** (Shift + Right-Click) on the named villager.
+3. The villager reads your book, displays `*Reads book* Understood. I know who I am now.` in a speech bubble, and saves that persona permanently!
+
+### Method B: In-game Command
+
+You can also assign or inspect personas via command without touching any files:
+
+* **Set a persona:**  
+  `/aivillagers persona <name> <description>`  
+  *(e.g. `/aivillagers persona Gareth You are Gareth, a grumpy blacksmith who loves iron. Reply in under 12 words.`)*  
+  If Gareth is nearby, he will turn to you and nod in acknowledgment!
+* **View a persona:**  
+  `/aivillagers persona <name>` — prints the villager's active persona to your chat.
+* **Reset to default:**  
+  `/aivillagers resetpersona <name>` — clears the custom persona and restores the default villager prompt.
+
 ## Configuration
 
 Settings are stored in `config/aivillagers.json`:
@@ -132,6 +156,9 @@ Settings are stored in `config/aivillagers.json`:
 
 | Command | Permission | Description |
 | --- | --- | --- |
+| `/aivillagers persona <name> <text>` | Everyone | Sets a custom persona for `<name>` and saves to config |
+| `/aivillagers persona <name>` | Everyone | Views the current persona for `<name>` |
+| `/aivillagers resetpersona <name>` | Everyone | Resets `<name>` to the default persona |
 | `/aivillagers status` | Everyone | Shows Ollama connection status, model, and active settings |
 | `/aivillagers reload` | Gamemasters / Ops | Reloads `config/aivillagers.json` without restarting the server |
 | `/aivillagers test <name> <message>` | Gamemasters / Ops | Tests a dialogue query against Ollama directly in chat |

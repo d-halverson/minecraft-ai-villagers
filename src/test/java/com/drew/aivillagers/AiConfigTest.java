@@ -59,4 +59,28 @@ public class AiConfigTest {
 		assertEquals(12.5, reloaded.chat.radius, 0.001);
 		assertEquals("You are Joe, a cheerful farmer.", reloaded.getPersona("farmer_joe"));
 	}
+
+	@Test
+	public void testSetAndRemovePersona(@TempDir Path tempDir) {
+		AiConfig cfg = AiConfig.load(tempDir);
+		assertFalse(cfg.hasCustomPersona("Elena"));
+
+		cfg.setPersona("Elena", "You are Elena, a cheerful florist.", tempDir);
+		assertTrue(cfg.hasCustomPersona("Elena"));
+		assertTrue(cfg.hasCustomPersona("elena"));
+		assertEquals("You are Elena, a cheerful florist.", cfg.getPersona("Elena"));
+
+		// Verify persisted to disk
+		AiConfig reloaded = AiConfig.load(tempDir);
+		assertTrue(reloaded.hasCustomPersona("elena"));
+		assertEquals("You are Elena, a cheerful florist.", reloaded.getPersona("Elena"));
+
+		// Test removal
+		boolean removed = reloaded.removePersona("Elena", tempDir);
+		assertTrue(removed);
+		assertFalse(reloaded.hasCustomPersona("Elena"));
+
+		AiConfig reloadedAfterRemove = AiConfig.load(tempDir);
+		assertFalse(reloadedAfterRemove.hasCustomPersona("Elena"));
+	}
 }

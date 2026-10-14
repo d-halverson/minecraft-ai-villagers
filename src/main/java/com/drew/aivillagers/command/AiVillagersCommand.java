@@ -45,6 +45,57 @@ public final class AiVillagersCommand {
 					});
 					return 1;
 				}))
+			.then(Commands.literal("persona")
+				.requires(Commands.hasPermission(Commands.LEVEL_ALL))
+				.then(Commands.argument("name", StringArgumentType.word())
+					.executes(ctx -> {
+						CommandSourceStack source = ctx.getSource();
+						String name = StringArgumentType.getString(ctx, "name");
+						AiConfig cfg = mod.getConfig();
+						boolean custom = cfg.hasCustomPersona(name);
+						String persona = cfg.getPersona(name);
+						if (custom) {
+							source.sendSuccess(() -> Component.literal("§6[AI Villagers] Custom persona for §f" + name + "§6: §7" + persona), false);
+						} else {
+							source.sendSuccess(() -> Component.literal("§7[AI Villagers] " + name + " uses default persona: §o\"" + persona + "\"§r"), false);
+						}
+						return 1;
+					})
+					.then(Commands.argument("description", StringArgumentType.greedyString())
+						.executes(ctx -> {
+							CommandSourceStack source = ctx.getSource();
+							String name = StringArgumentType.getString(ctx, "name");
+							String desc = StringArgumentType.getString(ctx, "description");
+							mod.setVillagerPersona(name, desc);
+							source.sendSuccess(() -> Component.literal("§a[AI Villagers] Set persona for §f" + name + "§a: §f" + desc), true);
+
+							// If executed by an in-game player, notify any nearby matching villager within 16 blocks
+							if (source.getEntity() instanceof net.minecraft.server.level.ServerPlayer sp) {
+								net.minecraft.world.phys.AABB box = sp.getBoundingBox().inflate(16.0);
+								java.util.List<net.minecraft.world.entity.npc.villager.AbstractVillager> villagers = sp.level().getEntitiesOfClass(
+									net.minecraft.world.entity.npc.villager.AbstractVillager.class, box,
+									v -> v.isAlive() && v.hasCustomName() && name.equalsIgnoreCase(v.getCustomName().getString().trim()));
+								for (net.minecraft.world.entity.npc.villager.AbstractVillager v : villagers) {
+									v.getLookControl().setLookAt(sp, 30.0f, 30.0f);
+									mod.getBubbleManager().show(v, "*Nods* Understood.", 4);
+								}
+							}
+							return 1;
+						}))))
+			.then(Commands.literal("resetpersona")
+				.requires(Commands.hasPermission(Commands.LEVEL_ALL))
+				.then(Commands.argument("name", StringArgumentType.word())
+					.executes(ctx -> {
+						CommandSourceStack source = ctx.getSource();
+						String name = StringArgumentType.getString(ctx, "name");
+						boolean removed = mod.removeVillagerPersona(name);
+						if (removed) {
+							source.sendSuccess(() -> Component.literal("§a[AI Villagers] Reset persona for §f" + name + "§a to default."), true);
+						} else {
+							source.sendFailure(Component.literal("[AI Villagers] No custom persona found for " + name + "."));
+						}
+						return 1;
+					})))
 			.then(Commands.literal("test")
 				.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
 				.then(Commands.argument("name", StringArgumentType.word())
